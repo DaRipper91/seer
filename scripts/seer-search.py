@@ -42,23 +42,24 @@ def semantic_search(query):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    cursor.execute("SELECT name, description, path, embedding FROM scripts WHERE embedding IS NOT NULL")
+    cursor.execute("SELECT name, COALESCE(description, ''), COALESCE(tags, ''), path, COALESCE(linked_configs, ''), run_count, COALESCE(last_run, 'Never'), embedding FROM scripts WHERE embedding IS NOT NULL")
     rows = cursor.fetchall()
 
     results = []
-    for name, description, path, blob in rows:
+    for name, description, tags, path, linked_configs, run_count, last_run, blob in rows:
         script_vector = blob_to_float_list(blob)
         similarity = cosine_similarity(query_vector, script_vector)
-        results.append((similarity, name, description, path))
+        results.append((similarity, name, description, tags, path, linked_configs, run_count, last_run))
 
     # Sort by similarity
     results.sort(key=lambda x: x[0], reverse=True)
 
-    # Print in a format fzf can use: "Similarity | Name | Description | Path"
-    for score, name, desc, path in results:
+    # Print in a format fzf can use: Name | Description | Tags | Path | Configs | Runs | Last Run
+    for score, name, desc, tags, path, configs, runs, last in results:
         # Scale score to 0-100 for readability
         score_pct = int(score * 100)
-        print(f"{score_pct}% | {name} | {desc} | {path}")
+        # We put the score in the name column so the user sees it, but the rest of the columns match exactly.
+        print(f"[{score_pct}%] {name} | {desc} | {tags} | {path} | {configs} | {runs} | {last}")
 
     conn.close()
 

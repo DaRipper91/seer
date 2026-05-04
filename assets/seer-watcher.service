@@ -1,0 +1,12 @@
+[Unit]
+Description=Seer Script Watcher (The Familiar)
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/daripper/Projects/seer/scripts/seer-watcher.py
+Restart=always
+RestartSec=10
+StandardOutput=null
+
+[Install]
+WantedBy=default.target
