@@ -1,5 +1,6 @@
 import customtkinter as ctk
 import sqlite3
+import socket
 import os
 import datetime
 import json
@@ -74,6 +75,28 @@ class SeerDashboard(ctk.CTk):
             command=self.start_scan_thread,
         )
         self.scan_btn.grid(row=0, column=2, padx=(0, 12), pady=12)
+
+        # --- Aether Bridge row ---
+        self.aether_entry = ctk.CTkEntry(
+            frame, placeholder_text="Selected ritual path (auto-fills from top result)...",
+            width=660, **entry_cfg)
+        self.aether_entry.grid(row=1, column=0, columnspan=2, padx=(12, 8), pady=(0, 10), sticky="w")
+
+        btn_cfg = dict(height=32, corner_radius=8, font=ctk.CTkFont(size=12, weight="bold"))
+
+        ctk.CTkButton(
+            frame, text="⬡ Open in Aether", width=155, **btn_cfg,
+            fg_color="#1a0835", hover_color="#2d0f5a", text_color="#c44dff",
+            border_width=1, border_color="#c44dff",
+            command=lambda: self._send_to_aether("open_file", self.aether_entry.get().strip()),
+        ).grid(row=1, column=2, padx=(0, 6), pady=(0, 10), sticky="e")
+
+        ctk.CTkButton(
+            frame, text="▶ Run in Aether", width=145, **btn_cfg,
+            fg_color="#0a1a0a", hover_color="#1a3a1a", text_color="#7dcfff",
+            border_width=1, border_color="#7dcfff",
+            command=lambda: self._send_to_aether("run", self.aether_entry.get().strip()),
+        ).grid(row=1, column=3, padx=(0, 12), pady=(0, 10), sticky="e")
 
         self.path_entry.bind("<Return>", lambda e: self.start_scan_thread())
         self.grep_entry.bind("<Return>", lambda e: self.start_scan_thread())
@@ -209,6 +232,14 @@ class SeerDashboard(ctk.CTk):
         for script in rows:
             self.main_display.after(0, self._append_script, script)
 
+        # Auto-fill Aether bridge with the top result
+        if rows:
+            top_path = rows[0].get("path", "")
+            self.aether_entry.after(0, lambda: (
+                self.aether_entry.delete(0, "end"),
+                self.aether_entry.insert(0, top_path),
+            ))
+
         self.status_label.after(
             0, lambda: self.status_label.configure(
                 text=f"status: complete | {count} scripts"
@@ -267,6 +298,30 @@ class SeerDashboard(ctk.CTk):
             self.main_display.delete("0.0", "end")
         self.main_display.insert("end", text)
         self.main_display.configure(state="disabled")
+
+    # ------------------------------------------------------------------ aether bridge
+
+    def _send_to_aether(self, action: str, path: str):
+        if not path:
+            self._write("\n⚠️  No path selected for Aether.\n")
+            return
+
+        payload = json.dumps({"action": action, "path": path}).encode()
+        sock_path = "/tmp/aether-ide"
+
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(2)
+                s.connect(sock_path)
+                s.sendall(payload)
+            verb = "Opened" if action == "open_file" else "Running"
+            self._write(f"\n⬡ {verb} in Aether: {path}\n")
+        except FileNotFoundError:
+            self._write("\n⚠️  Aether is not running — launch it first.\n")
+        except ConnectionRefusedError:
+            self._write("\n⚠️  Aether socket refused connection — is Aether open?\n")
+        except Exception as e:
+            self._write(f"\n⚠️  Aether bridge error: {e}\n")
 
     # ------------------------------------------------------------------ docs
 
