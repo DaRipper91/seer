@@ -1,4 +1,5 @@
 import customtkinter as ctk
+import sqlite3
 import os
 import datetime
 import json
@@ -8,7 +9,7 @@ from pathlib import Path
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-SCRIPT_EXTENSIONS = {'.py', '.fish', '.sh', '.bash', '.rb', '.js', '.ts', '.lua', '.pl'}
+DB_PATH = Path.home() / "Projects" / "seer" / "seer.db"
 
 
 class SeerDashboard(ctk.CTk):
@@ -16,15 +17,18 @@ class SeerDashboard(ctk.CTk):
         super().__init__()
 
         self.title("Seer : Astral Dashboard 2.0")
-        self.geometry("1000x680")
+        self.geometry("1000x700")
         self.configure(fg_color="#1a1b26")
 
-        self.found_scripts = []
+        self.found_scripts: list[dict] = []
 
         self._build_header()
         self._build_inputs()
         self._build_results()
         self._build_footer()
+
+        # Load full DB on start
+        self.after(100, self.start_scan_thread)
 
     def _build_header(self):
         frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -37,26 +41,30 @@ class SeerDashboard(ctk.CTk):
             text_color="#af87ff",
         ).pack(side="left")
 
-        ctk.CTkLabel(
+        self.db_label = ctk.CTkLabel(
             frame,
-            text="can view in Aether?",
+            text="",
             font=ctk.CTkFont(size=11),
             text_color="#565f89",
-        ).pack(side="right")
+        )
+        self.db_label.pack(side="right")
 
     def _build_inputs(self):
         frame = ctk.CTkFrame(self, fg_color="#1f2335", corner_radius=10)
         frame.pack(fill="x", padx=20, pady=(0, 10))
 
-        entry_cfg = dict(height=36, corner_radius=8, border_width=2,
-                         border_color="#7aa2f7", fg_color="#16161e", text_color="#c0caf5")
+        entry_cfg = dict(
+            height=36, corner_radius=8, border_width=2,
+            border_color="#7aa2f7", fg_color="#16161e", text_color="#c0caf5",
+        )
 
         self.path_entry = ctk.CTkEntry(
-            frame, placeholder_text="Path to scan...", width=380, **entry_cfg)
+            frame, placeholder_text="Filter by path prefix...", width=360, **entry_cfg)
         self.path_entry.grid(row=0, column=0, padx=(12, 8), pady=12, sticky="w")
 
         self.grep_entry = ctk.CTkEntry(
-            frame, placeholder_text="Whisper ancient text (grep)...", width=380, **entry_cfg)
+            frame, placeholder_text="Whisper ancient text (search name/desc/tags)...",
+            width=400, **entry_cfg)
         self.grep_entry.grid(row=0, column=1, padx=(0, 8), pady=12, sticky="w")
 
         self.scan_btn = ctk.CTkButton(
@@ -89,7 +97,7 @@ class SeerDashboard(ctk.CTk):
             font=ctk.CTkFont(family="Courier", size=13),
         )
         self.main_display.pack(expand=True, fill="both", padx=20, pady=(4, 10))
-        self.main_display.insert("0.0", "System idle. Enter a path and press Scan.\n")
+        self.main_display.insert("0.0", "Consulting the Oracle...\n")
         self.main_display.configure(state="disabled")
 
     def _build_footer(self):
@@ -99,7 +107,7 @@ class SeerDashboard(ctk.CTk):
 
         self.status_label = ctk.CTkLabel(
             frame,
-            text="status: awaiting orders | 0 scripts found",
+            text="status: awaiting orders",
             font=ctk.CTkFont(size=11),
             text_color="#565f89",
         )
@@ -121,73 +129,144 @@ class SeerDashboard(ctk.CTk):
     # ------------------------------------------------------------------ scan
 
     def start_scan_thread(self):
-        target_dir = self.path_entry.get().strip() or "."
+        path_filter = self.path_entry.get().strip()
         grep_term = self.grep_entry.get().strip()
-
-        if not os.path.isdir(target_dir):
-            self._write(f"⚠️  Directory '{target_dir}' does not exist.\n", clear=True)
-            return
 
         self.found_scripts = []
         self.scan_btn.configure(state="disabled", text="Scanning...")
-        self.status_label.configure(text=f"status: scanning... | 0 scripts found")
-        self._write(
-            f"🔮 Scanning: {os.path.abspath(target_dir)}"
-            + (f"  |  grep: '{grep_term}'" if grep_term else "")
-            + f"\n{'─' * 70}\n",
-            clear=True,
-        )
+        self.status_label.configure(text="status: consulting the oracle...")
+        self._write("", clear=True)
 
         threading.Thread(
-            target=self._run_scan, args=(target_dir, grep_term), daemon=True
+            target=self._run_scan, args=(path_filter, grep_term), daemon=True
         ).start()
 
-    def _run_scan(self, target_dir, grep_term):
-        found = []
+    def _run_scan(self, path_filter: str, grep_term: str):
+        if not DB_PATH.exists():
+            self.main_display.after(
+                0, self._write,
+                f"⚠️  Database not found at {DB_PATH}\n"
+                "Run python3 scripts/init_db.py then seer-index.py first.\n"
+            )
+            self._reset_btn()
+            return
 
-        for root, dirs, files in os.walk(target_dir):
-            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in
-                       {'node_modules', '__pycache__', '.git', 'venv', '.cargo'}]
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
 
-            for file in files:
-                path = Path(root) / file
-                if not self._is_script(path):
-                    continue
+            conditions, params = [], []
 
-                if grep_term and not self._grep(path, grep_term):
-                    continue
+            if path_filter:
+                abs_prefix = str(Path(path_filter).expanduser().resolve())
+                conditions.append("s.path LIKE ?")
+                params.append(f"{abs_prefix}%")
 
-                found.append(path)
-                self.main_display.after(0, self._append, str(path))
+            if grep_term:
+                # Try FTS5 first for speed; fall back to LIKE on failure
+                try:
+                    fts_query = """
+                        SELECT s.path, s.name, s.description, s.tags,
+                               s.run_count, s.last_run, s.extension
+                        FROM scripts s
+                        JOIN scripts_fts f ON s.id = f.rowid
+                        WHERE scripts_fts MATCH ?
+                    """
+                    fts_params = [grep_term]
+                    if path_filter:
+                        abs_prefix = str(Path(path_filter).expanduser().resolve())
+                        fts_query += " AND s.path LIKE ?"
+                        fts_params.append(f"{abs_prefix}%")
+                    fts_query += " ORDER BY rank LIMIT 500"
+                    cursor.execute(fts_query, fts_params)
+                except sqlite3.OperationalError:
+                    like = f"%{grep_term}%"
+                    conditions.append("(s.name LIKE ? OR s.description LIKE ? OR s.tags LIKE ?)")
+                    params.extend([like, like, like])
+                    cursor.execute(self._base_query(conditions), params)
+            else:
+                cursor.execute(self._base_query(conditions), params)
 
-        self.found_scripts = found
-        count = len(found)
-        self.main_display.after(
-            0, self._append, f"\n{'─' * 70}\n✔️  Seer found {count} script(s)."
+            rows = [dict(r) for r in cursor.fetchall()]
+            conn.close()
+        except Exception as e:
+            self.main_display.after(0, self._write, f"⚠️  DB error: {e}\n")
+            self._reset_btn()
+            return
+
+        self.found_scripts = rows
+        count = len(rows)
+
+        header = (
+            f"🔮 Oracle consulted — {count} ritual(s) found"
+            + (f"  |  path: {path_filter}" if path_filter else "")
+            + (f"  |  search: '{grep_term}'" if grep_term else "")
+            + f"\n{'─' * 70}\n"
         )
+        self.main_display.after(0, self._write, header, True)
+
+        for script in rows:
+            self.main_display.after(0, self._append_script, script)
+
         self.status_label.after(
             0, lambda: self.status_label.configure(
-                text=f"status: scan complete | {count} scripts found"
+                text=f"status: complete | {count} scripts"
             )
         )
-        self.scan_btn.after(0, lambda: self.scan_btn.configure(state="normal", text="Scan"))
+        self.db_label.after(
+            0, lambda: self.db_label.configure(
+                text=f"seer.db  ·  {DB_PATH}"
+            )
+        )
+        self._reset_btn()
 
-    def _is_script(self, path: Path) -> bool:
-        if path.suffix in SCRIPT_EXTENSIONS:
-            return True
-        try:
-            if os.access(path, os.X_OK) and not path.suffix:
-                with open(path, 'rb') as f:
-                    return f.read(2) == b'#!'
-        except Exception:
-            pass
-        return False
+    def _base_query(self, conditions: list[str]) -> str:
+        base = """
+            SELECT s.path, s.name, s.description, s.tags,
+                   s.run_count, s.last_run, s.extension
+            FROM scripts s
+        """
+        if conditions:
+            base += " WHERE " + " AND ".join(conditions)
+        base += " ORDER BY s.run_count DESC, s.last_run DESC, s.name ASC LIMIT 2000"
+        return base
 
-    def _grep(self, path: Path, term: str) -> bool:
-        try:
-            return term.lower() in path.read_text(errors='ignore').lower()
-        except Exception:
-            return False
+    def _reset_btn(self):
+        self.scan_btn.after(
+            0, lambda: self.scan_btn.configure(state="normal", text="Scan")
+        )
+
+    # ------------------------------------------------------------------ display
+
+    def _append_script(self, s: dict):
+        name = s.get("name", "unknown")
+        path = s.get("path", "")
+        desc = s.get("description") or ""
+        tags = s.get("tags") or ""
+        runs = s.get("run_count", 0)
+        last = s.get("last_run") or "never"
+
+        meta = f"▸ {runs} run{'s' if runs != 1 else ''} | last: {last}"
+        tag_line = f"  ↳ tags: {tags}" if tags.strip() else ""
+        desc_line = f"  ↳ {desc[:120]}" if desc.strip() else ""
+
+        self.main_display.configure(state="normal")
+        self.main_display.insert("end", f"\n📄 {name:<45} {meta}\n")
+        if desc_line:
+            self.main_display.insert("end", f"{desc_line}\n")
+        if tag_line:
+            self.main_display.insert("end", f"{tag_line}\n")
+        self.main_display.insert("end", f"   {path}\n")
+        self.main_display.see("end")
+        self.main_display.configure(state="disabled")
+
+    def _write(self, text, clear=False):
+        self.main_display.configure(state="normal")
+        if clear:
+            self.main_display.delete("0.0", "end")
+        self.main_display.insert("end", text)
+        self.main_display.configure(state="disabled")
 
     # ------------------------------------------------------------------ docs
 
@@ -201,49 +280,46 @@ class SeerDashboard(ctk.CTk):
     def _forge_all(self):
         doc_dir = Path.home() / "Projects" / "seer" / "seer_manuals"
         doc_dir.mkdir(parents=True, exist_ok=True)
-        for path in self.found_scripts:
-            out = self._build_doc(path, doc_dir)
-            self.main_display.after(0, self._append, f"📖 {out}")
-        self.main_display.after(0, self._append, f"\n✔️  All docs forged → {doc_dir}")
+        for s in self.found_scripts:
+            out = self._build_doc(s, doc_dir)
+            self.main_display.after(0, self._write, f"  📖 {out}\n")
+        self.main_display.after(0, self._write, f"\n✔️  All docs forged → {doc_dir}\n")
 
-    def _build_doc(self, path: Path, doc_dir: Path) -> str:
+    def _build_doc(self, s: dict, doc_dir: Path) -> str:
+        path = Path(s.get("path", ""))
+        name = s.get("name", path.name)
+        description = s.get("description") or "No description found."
+        tags = s.get("tags") or "None"
+        runs = s.get("run_count", 0)
+        ext = s.get("extension") or path.suffix or "executable"
+
+        dependencies = []
         try:
-            content = path.read_text(errors='ignore')
+            content = path.read_text(errors="ignore")
             lines = content.splitlines()
+            if ext == ".py":
+                dependencies = [
+                    l.replace("import ", "").replace("from ", "").split()[0]
+                    for l in lines if l.startswith("import ") or l.startswith("from ")
+                ]
         except Exception:
-            return f"(could not read {path.name})"
-
-        description, dependencies = "No description found.", []
-
-        if path.suffix == '.py':
-            if '"""' in content:
-                try:
-                    description = content.split('"""')[1].strip().splitlines()[0]
-                except IndexError:
-                    pass
-            dependencies = [
-                l.replace('import ', '').replace('from ', '').split()[0]
-                for l in lines if l.startswith('import ') or l.startswith('from ')
-            ]
-        elif path.suffix in {'.fish', '.sh', '.bash'}:
-            comments = [l.lstrip('#').strip() for l in lines
-                        if l.startswith('#') and not l.startswith('#!')]
-            if comments:
-                description = ' '.join(comments[:3])
+            pass
 
         doc_path = doc_dir / f"{path.stem}_man.md"
         doc_path.write_text(
-            f"# {path.name.upper()} Manual\n\n"
+            f"# {name.upper()} Manual\n\n"
             f"**Generated:** {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}  \n"
-            f"**Path:** `{path.absolute()}`  \n"
-            f"**Type:** `{path.suffix or 'executable'}`\n\n"
+            f"**Path:** `{path}`  \n"
+            f"**Type:** `{ext}`  \n"
+            f"**Run count:** {runs}  \n"
+            f"**Tags:** {tags}\n\n"
             f"---\n\n"
             f"## Purpose\n{description}\n\n"
             f"## Dependencies\n"
             f"{', '.join(set(dependencies)) if dependencies else 'None detected.'}\n\n"
-            f"## Usage\n```bash\n./{path.name}\n```\n"
+            f"## Usage\n```bash\n./{name}\n```\n"
         )
-        return str(doc_path) + "\n"
+        return str(doc_path)
 
     # ------------------------------------------------------------------ export
 
@@ -252,29 +328,27 @@ class SeerDashboard(ctk.CTk):
             self._write("\n⚠️  No scripts to export. Run a scan first.\n")
             return
 
-        out_path = Path.home() / "Projects" / "seer" / f"seer_report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        out_path = (
+            Path.home() / "Projects" / "seer"
+            / f"seer_report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        )
         report = {
             "generated": datetime.datetime.now().isoformat(),
             "total": len(self.found_scripts),
-            "scripts": [str(p) for p in self.found_scripts],
+            "scripts": [
+                {
+                    "name": s.get("name"),
+                    "path": s.get("path"),
+                    "description": s.get("description"),
+                    "tags": s.get("tags"),
+                    "run_count": s.get("run_count"),
+                    "last_run": s.get("last_run"),
+                }
+                for s in self.found_scripts
+            ],
         }
         out_path.write_text(json.dumps(report, indent=2))
         self._write(f"\n📊 Report exported → {out_path}\n")
-
-    # ------------------------------------------------------------------ helpers
-
-    def _write(self, text, clear=False):
-        self.main_display.configure(state="normal")
-        if clear:
-            self.main_display.delete("0.0", "end")
-        self.main_display.insert("end", text)
-        self.main_display.configure(state="disabled")
-
-    def _append(self, text):
-        self.main_display.configure(state="normal")
-        self.main_display.insert("end", f"  {text}\n")
-        self.main_display.see("end")
-        self.main_display.configure(state="disabled")
 
 
 if __name__ == "__main__":
