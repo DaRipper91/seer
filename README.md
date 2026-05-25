@@ -1,33 +1,40 @@
-# 🔮 SEER
+# Seer: The Eye of Automation
 
-> "The Eye of Automation sees all... and it has a cat."
+Seer is an intelligent automation suite that helps you hunt, manage, and manifest your project scripts. It bridges the gap between raw terminal power and intuitive, visual control.
 
-```text
-          .          . 
-                .          * 
-       *      _/"_/
-             / o . o \
-     .      (   ^   )       * 
-             )     (      . 
-    *       /       \ 
-           /         \ 
-          /           \ 
-         /             \ 
+## 🔮 The Astral Dashboard (New!)
+
+Seer now features a sleek, high-performance GUI called the **Astral Dashboard**. Built with `customtkinter`, it provides a modern, dark-mode experience that makes managing your scripts a breeze.
+
+### Key Features:
+*   **Threaded Scanning Engine**: Scan directories without locking your interface.
+*   **Recursive Discovery**: Automatically hunts for scripts across nested folder structures.
+*   **Visual Manifestation**: A "Crystal Ball" textbox that streams found scripts in real-time.
+*   **System Integration**: One-click installation into your Linux application menu.
+
+## 🚀 Quick Start
+
+### Installation
+Register Seer in your system menu:
+```bash
+./scripts/install_seer.sh
 ```
+Once installed, search for **"Seer Astral Dashboard"** in your application launcher.
 
-**Seer** is a mystical, SQLite-powered script management engine for power users.
+### Development Workflow
+For developers, the dashboard is located at `scripts/seer-gui.py`. 
 
-## 🌙 The Vibe
-- **Gypsy Aesthetics:** Mystical, flashy, and investigative.
-- **Purple Cat Energy:** Agile, independent, and sees in the dark.
-- **Witchy Automation:** Turning complex shell commands into simple incantations.
+1.  **Launch**: Open the app from your launcher or via command line:
+    ```bash
+    ~/Projects/seer/venv/bin/python3 scripts/seer-gui.py
+    ```
+2.  **Scan**: Enter any directory path in the "Whisper your intent..." field and hit **Enter**.
+3.  **Manifest**: The dashboard will recursively scan for `.py`, `.fish`, `.sh`, and executable scripts.
 
-## 🔮 Capabilities
-- **Omniscient Search:** SQLite FTS5 indexes thousands of scripts in milliseconds.
-- **Memory:** Tracks `run_count` and `last_run` to surface what you need before you ask.
-- **Perception:** Automatically extracts descriptions and shebangs from your code.
+## 🛠 Project Components
+- **Dashboard (`scripts/seer-gui.py`)**: The new Python-based GUI entry point.
+- **Engine (`scripts/seer.fish`)**: The core CLI fuzzy-finder powered by `fzf` and `sqlite3`.
+- **Scripts (`scripts/`)**: A collection of utility scripts for search, embedding, and system healing.
 
-## 🛠️ Components
-- `seer`: The primary fuzzy-finding oracle.
-- `seer-refresh`: Re-scans your system to update the Seer's vision.
-- `seer.db`: The crystalline storage for all script metadata.
+---
+*Manifested with the Eye of Automation.*
