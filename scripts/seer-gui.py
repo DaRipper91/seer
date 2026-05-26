@@ -123,6 +123,9 @@ class SeerDashboard(ctk.CTk):
         self.main_display.insert("0.0", "Consulting the Oracle...\n")
         self.main_display.configure(state="disabled")
 
+        # Click on a path line → auto-fill the Aether bridge entry
+        self.main_display._textbox.bind("<Button-1>", self._on_result_click)
+
     def _build_footer(self):
         frame = ctk.CTkFrame(self, fg_color="#1f2335", corner_radius=0, height=46)
         frame.pack(fill="x", side="bottom")
@@ -291,6 +294,16 @@ class SeerDashboard(ctk.CTk):
         self.main_display.insert("end", f"   {path}\n")
         self.main_display.see("end")
         self.main_display.configure(state="disabled")
+
+    def _on_result_click(self, event):
+        """When user clicks a path line in results, populate the Aether bridge entry."""
+        widget = event.widget
+        index = widget.index(f"@{event.x},{event.y}")
+        line = widget.get(f"{index} linestart", f"{index} lineend").strip()
+        # Path lines start with '/' or '~/' after stripping
+        if line.startswith("/") or line.startswith("~/"):
+            self.aether_entry.delete(0, "end")
+            self.aether_entry.insert(0, line)
 
     def _write(self, text, clear=False):
         self.main_display.configure(state="normal")
