@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 seer.db
 .DS_Store
+
+# Generated man-page dumps
+seer_manuals/

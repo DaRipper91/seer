@@ -7,13 +7,13 @@ function seer --description 'Fuzzy find and act on system scripts (AI + SQLite p
     # Colors for the terminal
     set -l PURPLE (set_color af87ff)
     set -l GOLD (set_color d7af00)
+    set -l CYAN (set_color 5fafd7)
     set -l RESET (set_color normal)
 
     # Mode: Standard (SQLite) or Semantic (AI)
-    # We include tags in the visible search and link configs in the hidden columns
     set -l query "SELECT name || ' | ' || COALESCE(description, '') || ' | ' || COALESCE(tags, '') || ' | ' || path || ' | ' || COALESCE(linked_configs, '') || ' | ' || run_count || ' | ' || COALESCE(last_run, 'Never') FROM scripts ORDER BY run_count DESC, last_run DESC, mtime DESC"
     
-    # Preview Command: Uses pygmentize for colors and shows "The Crystal Ball" (stats)
+    # Adaptive Preview Command
     set -l preview_cmd '
         set -l file {4}
         set -l tags {3}
@@ -27,22 +27,24 @@ function seer --description 'Fuzzy find and act on system scripts (AI + SQLite p
             echo -e "\033[33mConfigs:\033[0m $configs"
         end
         echo -e "\033[1;34m--- Source ---\033[0m"
-        pygmentize -g $file | head -n 40
+        pygmentize -g $file 2>/dev/null | head -n 40 || cat $file | head -n 40
     '
 
     set -l selected (sqlite3 -separator ' | ' "$db_path" "$query" | fzf \
-        --prompt="🔮 Seer Search: " \
-        --height=80% --layout=reverse --border=rounded \
+        --prompt="🔮 Seer: " \
+        --height=90% --layout=reverse --border=double \
         --color="bg+:#262626,fg+:#af87ff,hl:#5fafd7,hl+:#5fafd7" \
         --color="border:#875faf,header:#af87ff,gutter:#262626" \
         --color="pointer:#af87ff,info:#af87ff,prompt:#5fafd7" \
         --delimiter ' \| ' \
-        --with-nth 1,2,3 \
+        --with-nth 1,2 \
         --preview "$preview_cmd" \
-        --header="Enter: Options | Ctrl-S: Semantic Search | Ctrl-R: Refresh | Ctrl-T: Tag" \
+        --preview-window="right:60%:wrap:border-left" \
+        --header="[Enter] Manifest | [Ctrl-S] AI Scry | [Ctrl-T] Tag | [Ctrl-E] Edit | [Ctrl-C] Copy" \
         --bind "ctrl-r:execute(python3 ~/Projects/seer/scripts/seer-index.py)+reload(sqlite3 -separator ' | ' $db_path \"$query\")" \
         --bind "ctrl-s:unbind(ctrl-s)+change-prompt(🧠 AI Seer: )+reload(python3 ~/Projects/seer/scripts/seer-search.py {q})" \
-        --bind "ctrl-o:execute($EDITOR {4})" \
+        --bind "ctrl-e:execute($EDITOR {4})" \
+        --bind "ctrl-c:execute(echo -n {4} | wl-copy || echo -n {4} | xclip -selection clipboard)+become(echo '📋 Path captured in the ether.')" \
         --bind "ctrl-t:execute(read -P 'New Tags: ' ntags; sqlite3 $db_path \"UPDATE scripts SET tags = '$ntags' WHERE path = '{4}'\")+reload(sqlite3 -separator ' | ' $db_path \"$query\")")
 
     if test -n "$selected"
@@ -51,80 +53,57 @@ function seer --description 'Fuzzy find and act on system scripts (AI + SQLite p
         set -l path $parts[4]
         set -l configs $parts[5]
         
-        echo -e "\n📍 $PURPLE Selected:$RESET $GOLD$name$RESET"
-        set -l prompt "Options: [$PURPLE x$RESET]ecute, [$PURPLE e$RESET]dit, [$PURPLE c$RESET]opy path"
+        # Clean the name if it has a match percentage
+        set -l display_name (string replace -r "^\[[0-9]+%\] " "" "$name")
+
+        # Action Selection Menu (UX Improvement: Don't just prompt, make it a ritual)
+        echo -e "\n📍 $PURPLE Manifesting:$RESET $GOLD$display_name$RESET"
+        
+        set -l action "Execute"
         if test -n "$configs"
-            set prompt "$prompt, [$PURPLE v$RESET]iew config"
+            set action (printf "Execute\nEdit Script\nView Config\nCancel" | fzf --height=5 --layout=reverse --border=rounded --prompt="✨ Select Ritual: " --color="border:#875faf,prompt:#af87ff,pointer:#af87ff")
         end
-        set prompt "$prompt, [$PURPLE q$RESET]uit"
-        
-        echo -e $prompt
-        read -l -P "> " choice
-        
-        switch $choice
-            case x
-                echo -e "🔮 $PURPLE Manifesting script...$RESET"
+
+        switch $action
+            case "Execute" "" # Default is execute if fzf wasn't triggered
+                echo -e "🔮 $PURPLE Casting Incantation...$RESET"
                 
                 # Casting Animation
                 set -l frames "⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏"
-                for i in (seq 1 20)
+                for i in (seq 1 15)
                     set -l frame $frames[(math "$i % 10 + 1")]
-                    echo -ne "\r$PURPLE $frame Casting Incantation... [ "(math $i \* 5)"% ]$RESET"
-                    sleep 0.05
+                    echo -ne "\r$PURPLE $frame Manifesting... [ "(math $i \* 7)"% ]$RESET"
+                    sleep 0.04
                 end
-                echo -e "\r✅ $GOLD Incantation Complete! Manifesting...$RESET"
+                echo -e "\r✅ $GOLD Incantation Complete!$RESET"
 
-                # Update run count
+                # Update stats and backup
                 sqlite3 "$db_path" "UPDATE scripts SET run_count = run_count + 1, last_run = CURRENT_TIMESTAMP WHERE path = '$path'"
-                
-                # Backup to Chronos Vault
                 python3 ~/Projects/seer/scripts/seer-chronos.py backup "$path"
                 
-                # Execute and catch errors for the Alchemist
+                # Execution
                 set -l tmp_err (mktemp)
-                
-                if string match -q "*.fish" "$path"
-                    fish "$path" 2> $tmp_err
-                else if string match -q "*.py" "$path"
-                    python3 "$path" 2> $tmp_err
-                else
-                    bash "$path" 2> $tmp_err
-                end
+                if string match -q "*.fish" "$path"; fish "$path" 2> $tmp_err
+                else if string match -q "*.py" "$path"; python3 "$path" 2> $tmp_err
+                else; bash "$path" 2> $tmp_err; end
                 
                 set -l exit_status $status
-                
-                # Show the error output as it normally would appear
                 cat $tmp_err >&2
 
                 if test $exit_status -ne 0
-                    echo -e "\n\033[31m⚠️  The ritual was interrupted! (Exit code: $exit_status)\033[0m"
-                    read -l -P "🧪 Consult the Alchemist to diagnose the failure? [y/N] " heal_choice
+                    echo -e "\n\033[31m⚠️  Ritual Interrupted! (Code: $exit_status)\033[0m"
+                    read -l -P "🧪 Consult the Alchemist? [y/N] " heal_choice
                     if test "$heal_choice" = "y" -o "$heal_choice" = "Y"
                         cat $tmp_err | python3 ~/Projects/seer/scripts/seer-healer.py "$path" "$exit_status"
                     end
                 end
-                
                 rm -f $tmp_err
-            case e
+            case "Edit Script"
                 eval $EDITOR "$path"
-            case c
-                if command -v wl-copy >/dev/null
-                    echo -n "$path" | wl-copy
-                    echo "📋 Copied path to clipboard."
-                else if command -v xclip >/dev/null
-                    echo -n "$path" | xclip -selection clipboard
-                    echo "📋 Copied path to clipboard."
-                else
-                    echo "Path: $path"
-                end
-            case v
-                if test -n "$configs"
-                    set -l config_list (string split "," "$configs")
-                    eval $EDITOR $config_list[1]
-                else
-                    echo "No linked configs found."
-                end
-            case '*'
+            case "View Config"
+                set -l config_list (string split "," "$configs")
+                eval $EDITOR $config_list[1]
+            case "*"
                 return 0
         end
     end
